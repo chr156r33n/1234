@@ -61,7 +61,7 @@ def with_retries(
                     time.sleep(current_delay)
                     current_delay *= backoff
         return wrapper
-    
+
     # If called as @with_retries (no parentheses) or @with_retries() or @with_retries(label="...")
     if func is None:
         return decorator
@@ -93,6 +93,8 @@ class KeywordCandidate:
     page_type_confidence: Optional[float] = None
     selection_role: Optional[str] = None
     selection_reason: Optional[str] = None
+    cluster_id: Optional[int] = None
+    cluster_label: Optional[str] = None
 
 
 # -------------------------------------------------------------------
@@ -116,7 +118,7 @@ class VertexLLM:
         )
         self.generation_config = {
             "temperature": temperature,
-            "max_output_tokens": 30096,  # Increased for longer JSON responses (5-15 keywords)
+            "max_output_tokens": 30096,  # Increased for longer JSON responses
             "top_p": 0.95,
             "top_k": 32,
         }
@@ -136,16 +138,16 @@ class VertexLLM:
             raise RuntimeError("No candidates from model")
 
         cand = resp.candidates[0]
-        
+
         # Check if response was truncated
-        finish_reason = getattr(cand, 'finish_reason', None)
+        finish_reason = getattr(cand, "finish_reason", None)
         if finish_reason:
             finish_reason_str = str(finish_reason)
-            if hasattr(finish_reason, 'name'):
+            if hasattr(finish_reason, "name"):
                 finish_reason_str = finish_reason.name
-            if 'MAX_TOKENS' in finish_reason_str or 'max_tokens' in finish_reason_str.lower():
-                logger.warning(f"[LLM] Response was truncated due to MAX_TOKENS limit. Consider increasing max_output_tokens.")
-        
+            if "MAX_TOKENS" in finish_reason_str or "max_tokens" in finish_reason_str.lower():
+                logger.warning("[LLM] Response was truncated due to MAX_TOKENS limit. Consider increasing max_output_tokens.")
+
         try:
             text = cand.text
         except Exception:
@@ -160,7 +162,7 @@ class VertexLLM:
             text = "\n".join(chunks).strip()
 
         logger.debug(f"[LLM] Response length: {len(text)} chars")
-        if finish_reason and ('MAX_TOKENS' in str(finish_reason) or (hasattr(finish_reason, 'name') and 'MAX_TOKENS' in finish_reason.name)):
+        if finish_reason and ("MAX_TOKENS" in str(finish_reason) or (hasattr(finish_reason, "name") and "MAX_TOKENS" in finish_reason.name)):
             logger.warning(f"[LLM] Response may be incomplete - truncated at {len(text)} chars")
         if not text:
             raise RuntimeError("Model returned no user-visible text")
@@ -189,70 +191,47 @@ def mcp_call_with_logging(
 def _extract_first_text_content(mcp_response: Dict[str, Any]) -> str:
     """
     Extract the first text content from an MCP tool response.
-    
-    The mcp.call() method returns to_tool_response() format:
-    {
-      "action": "...",
-      "params": {...},
-      "success": True/False,
-      "data": [{"type": "text", "text": "Keyword;Search Volume;..."}],  # or None if error
-      "message": "...",
-      ...
-    }
-    
-    OR if there's an error:
-    {
-      "action": "...",
-      "error": "...",
-      "success": False,
-      ...
-    }
     """
     # Check for errors first
     if not mcp_response.get("success", False):
         error_msg = mcp_response.get("error") or mcp_response.get("message", "Unknown error")
         logger.warning(f"[MCP] Response indicates failure: {error_msg}")
         return ""
-    
-    # Extract data (which contains the content array)
+
     data = mcp_response.get("data")
     if data is None:
         logger.warning("[MCP] No data field in response")
         return ""
-    
-    # Handle if data is already a list of content items (from MCP server)
+
     if isinstance(data, list):
         contents = data
-    # Handle if data is a dict with a content array (raw MCP response format)
     elif isinstance(data, dict) and "content" in data:
         contents = data.get("content", [])
-    # Handle if data is a dict with a result that has content (nested format)
     elif isinstance(data, dict) and "result" in data:
         result = data.get("result", {})
         contents = result.get("content", [])
     else:
         logger.warning(f"[MCP] Unexpected data format: {type(data)}. Keys: {list(data.keys()) if isinstance(data, dict) else 'N/A'}")
         return ""
-    
+
     if not contents:
         logger.warning("[MCP] Empty content array in response")
         return ""
-    
+
     first = contents[0]
     if not isinstance(first, dict):
         logger.warning(f"[MCP] First content item is not a dict: {type(first)}")
         return ""
-    
+
     text = first.get("text", "")
     if not text:
         logger.warning("[MCP] First content item has no 'text'")
         return ""
-    
-    # Check for error messages from Semrush API
+
     if text.strip().startswith("ERROR"):
         logger.warning(f"[MCP] API returned error: {text.strip()}")
         return ""
-    
+
     return text
 
 
@@ -261,12 +240,11 @@ def _parse_semrush_csv_text(csv_text: str) -> List[Dict[str, str]]:
     csv_text = csv_text.strip()
     if not csv_text:
         return []
-    
-    # Skip error messages
+
     if csv_text.startswith("ERROR"):
         logger.debug(f"[MCP] Skipping error message: {csv_text[:100]}")
         return []
-    
+
     normalized = csv_text.replace(";", ",")
     try:
         reader = csv.DictReader(io.StringIO(normalized))
@@ -279,7 +257,7 @@ def _parse_semrush_csv_text(csv_text: str) -> List[Dict[str, str]]:
 
 
 # -------------------------------------------------------------------
-# Stage 1: Seed extraction prompt
+# Seed extraction
 # -------------------------------------------------------------------
 
 SEED_EXTRACT_PROMPT = """You are an SEO specialist.
@@ -322,16 +300,12 @@ BODY (truncated if long):
 def _strip_markdown_code_blocks(text: str) -> str:
     """Strip markdown code block markers (```json, ```, etc.) from text."""
     text = text.strip()
-    # Remove opening code block markers (```json, ```, etc.)
     if text.startswith("```"):
-        # Find the first newline after the opening marker
         first_newline = text.find("\n")
         if first_newline != -1:
             text = text[first_newline + 1:]
         else:
-            # No newline, just remove the marker
             text = text[3:]
-    # Remove closing code block markers
     if text.endswith("```"):
         text = text[:-3]
     return text.strip()
@@ -347,14 +321,11 @@ def extract_seeds_from_page(
 
     prompt = SEED_EXTRACT_PROMPT.format(title=title, h1=h1, body=body_text[:8000])
     raw = llm.generate(prompt)
-    
-    # Strip markdown code blocks if present
     raw = _strip_markdown_code_blocks(raw)
 
     try:
         data = loads(raw)
     except Exception as exc:
-        # Log more of the response to help debug truncation issues
         logger.error(f"[Seeds] Failed to parse JSON from LLM: {exc}")
         logger.error(f"[Seeds] Response length: {len(raw)} chars")
         logger.error(f"[Seeds] Response (first 800 chars): {raw[:800]}")
@@ -380,7 +351,7 @@ def extract_seeds_from_page(
 
 
 # -------------------------------------------------------------------
-# Stage 2: Keyword discovery
+# Keyword discovery
 # -------------------------------------------------------------------
 
 def discover_keywords_with_semrush(
@@ -391,14 +362,7 @@ def discover_keywords_with_semrush(
     max_seeds: int = 5,
 ) -> List[KeywordCandidate]:
     """
-    For each seed keyword, call:
-      - get_keyword_overview (seed validation)
-      - get_keyword_fullsearch
-      - get_keyword_related
-      - get_keyword_questions
-    Then normalise into a deduped list of KeywordCandidate.
-
-    max_seeds: hard cap to avoid spraying Semrush for 20 seeds at once.
+    For each seed keyword, call Semrush tools and build KeywordCandidate list.
     """
     if not seeds:
         logger.warning("[Discover] No seeds provided, skipping Semrush discovery")
@@ -418,7 +382,6 @@ def discover_keywords_with_semrush(
             if not kw:
                 continue
 
-            # Avoid blowing up on garbage values
             try:
                 vol = int(row.get("Search Volume") or row.get("search_volume") or 0)
             except ValueError:
@@ -452,7 +415,7 @@ def discover_keywords_with_semrush(
         seed_kw = seed.keyword
         logger.info(f"[Discover] Processing seed '{seed_kw}'")
 
-        # 1) Overview
+        # Overview
         try:
             overview_resp = mcp_call_with_logging(
                 mcp,
@@ -464,7 +427,7 @@ def discover_keywords_with_semrush(
         except Exception as exc:
             logger.warning(f"[Discover] overview failed for '{seed_kw}': {exc}")
 
-        # 2) Fullsearch
+        # Fullsearch
         try:
             fullsearch_resp = mcp_call_with_logging(
                 mcp,
@@ -476,7 +439,7 @@ def discover_keywords_with_semrush(
         except Exception as exc:
             logger.warning(f"[Discover] fullsearch failed for '{seed_kw}': {exc}")
 
-        # 3) Related
+        # Related
         try:
             related_resp = mcp_call_with_logging(
                 mcp,
@@ -488,7 +451,7 @@ def discover_keywords_with_semrush(
         except Exception as exc:
             logger.warning(f"[Discover] related failed for '{seed_kw}': {exc}")
 
-        # 4) Questions (optional)
+        # Questions
         try:
             questions_resp = mcp_call_with_logging(
                 mcp,
@@ -505,7 +468,7 @@ def discover_keywords_with_semrush(
 
 
 # -------------------------------------------------------------------
-# Stage 3: Target domain rankings
+# Rankings enrichment
 # -------------------------------------------------------------------
 
 def enrich_with_current_rank(
@@ -517,10 +480,9 @@ def enrich_with_current_rank(
     max_keywords: int = 50,
 ) -> None:
     """
-    For each candidate, call a Semrush SERP tool and set:
+    For each candidate, call SERP tool and set:
       - current_rank
-      - serp_top3 (domain/url)
-    Mutates the candidates in place.
+      - serp_top3
     """
     if not candidates:
         logger.warning("[Rank] No candidates to enrich with rankings")
@@ -529,7 +491,7 @@ def enrich_with_current_rank(
     target_domain_norm = target_domain.lower().strip().lstrip("www.")
     logger.info(f"[Rank] Enriching rankings for up to {max_keywords} keywords")
 
-    for i, cand in enumerate(candidates[:max_keywords]):
+    for cand in candidates[:max_keywords]:
         kw = cand.keyword
         try:
             serp_resp = mcp_call_with_logging(
@@ -571,7 +533,7 @@ def enrich_with_current_rank(
 
 
 # -------------------------------------------------------------------
-# Stage 4: Page-type inference
+# Page-type inference
 # -------------------------------------------------------------------
 
 PAGE_TYPE_PROMPT = """You are an SEO analyst.
@@ -613,11 +575,10 @@ def infer_page_types(
 ) -> None:
     """
     Batch a subset of candidates into one LLM call to infer best_page_type & confidence.
-    Mutates candidates in place.
     """
     from json import dumps, loads
 
-    subset = [c for c in candidates if c.serp_top3]  # only those with SERP data
+    subset = [c for c in candidates if c.serp_top3]
     subset = subset[:max_keywords]
 
     if not subset:
@@ -635,8 +596,6 @@ def infer_page_types(
 
     prompt = PAGE_TYPE_PROMPT.format(data=dumps(payload, indent=2))
     raw = llm.generate(prompt)
-    
-    # Strip markdown code blocks if present
     raw = _strip_markdown_code_blocks(raw)
 
     try:
@@ -666,7 +625,7 @@ def infer_page_types(
 
 
 # -------------------------------------------------------------------
-# Stage 5: PLP keyword selection
+# PLP keyword selection (with clustering)
 # -------------------------------------------------------------------
 
 PLP_SELECTION_PROMPT = """You are helping select the best PLP (product listing page) target keywords.
@@ -695,25 +654,28 @@ Your task:
 
 Return strictly JSON in this format (no extra text):
 
-{
+{{
   "selection": [
-    {
-      "keyword": "...",
+    {{
+      "keyword": "example keyword",
       "keep": true,
-      "role": "core" | "support" | "long_tail",
+      "role": "core",
       "cluster_id": 1,
       "cluster_label": "short human-readable label for this cluster",
       "reason": "Short rationale referencing volume, competition, rankings and cluster fit."
-    }
+    }}
   ]
-}
+}}
 
-Clustering rules:
+Rules:
+- role must be one of "core", "support", "long_tail".
 - All selected keywords MUST have a cluster_id (integer, e.g. 1, 2, 3…).
 - cluster_label should describe the shared theme (e.g. "anti aging moisturiser", "oil-free face cream").
 - Keywords in the same semantic group share the same cluster_id and cluster_label.
 
 Here is the candidate data:
+
+{data}
 """
 
 
@@ -723,8 +685,8 @@ def select_plp_keywords(
     max_candidates: int = 60,
 ) -> List[KeywordCandidate]:
     """
-    Uses LLM to label which keywords to keep, role, and reason.
-    Returns new list of selected candidates (mutated with selection_* fields).
+    Uses LLM to label which keywords to keep, role, cluster and reason.
+    Returns new list of selected candidates (mutated with selection_* and cluster_* fields).
     """
     from json import dumps, loads
 
@@ -749,8 +711,6 @@ def select_plp_keywords(
 
     prompt = PLP_SELECTION_PROMPT.format(data=dumps(payload, indent=2))
     raw = llm.generate(prompt)
-    
-    # Strip markdown code blocks if present
     raw = _strip_markdown_code_blocks(raw)
 
     try:
@@ -759,7 +719,7 @@ def select_plp_keywords(
         logger.error(f"[Select] Failed to parse JSON from LLM: {exc}. Raw: {raw[:400]}...")
         return []
 
-    decisions = {item["keyword"]: item for item in data.get("selection", [])}
+    decisions = {item["keyword"]: item for item in data.get("selection", []) if "keyword" in item}
 
     selected: List[KeywordCandidate] = []
     for c in subset:
@@ -768,8 +728,22 @@ def select_plp_keywords(
             continue
         if not info.get("keep"):
             continue
-        c.selection_role = info.get("role")
-        c.selection_reason = info.get("reason", "")
+
+        role = (info.get("role") or "").strip()
+        if role not in ("core", "support", "long_tail"):
+            role = "support"
+        c.selection_role = role
+
+        c.selection_reason = (info.get("reason") or "").strip()
+
+        cluster_id = info.get("cluster_id")
+        try:
+            c.cluster_id = int(cluster_id) if cluster_id is not None else None
+        except (TypeError, ValueError):
+            c.cluster_id = None
+
+        c.cluster_label = (info.get("cluster_label") or "").strip() or None
+
         selected.append(c)
 
     logger.info(f"[Select] Selected {len(selected)} PLP keywords from {len(subset)} candidates")
@@ -777,7 +751,7 @@ def select_plp_keywords(
 
 
 # -------------------------------------------------------------------
-# Stage 6: CSV output
+# CSV output
 # -------------------------------------------------------------------
 
 def write_plp_csv(
@@ -790,7 +764,8 @@ def write_plp_csv(
 
     fieldnames = [
         "keyword",
-        "clustered_term",
+        "cluster_id",
+        "clustered_term",  # cluster_label
         "volume",
         "cpc",
         "competition",
@@ -810,9 +785,9 @@ def write_plp_csv(
             serp_domains = ",".join([s["domain"] for s in (c.serp_top3 or [])])
             serp_urls = ",".join([s["url"] for s in (c.serp_top3 or [])])
             row = asdict(c)
-            # Remove serp_top3 from row (it's a list, not CSV-compatible)
-            # We've already extracted it to serp_top3_domains and serp_top3_urls
             row.pop("serp_top3", None)
+            # Map cluster_label into clustered_term
+            row["clustered_term"] = c.cluster_label or ""
             row["serp_top3_domains"] = serp_domains
             row["serp_top3_urls"] = serp_urls
             writer.writerow(row)
@@ -837,7 +812,6 @@ def run_plp_pipeline(
 ) -> None:
     """
     Glue it all together.
-    Use debug=True for noisy logs while you dial this in.
     """
     global MCP_CALL_COUNT, LLM_CALL_COUNT
     MCP_CALL_COUNT = 0
@@ -848,7 +822,6 @@ def run_plp_pipeline(
 
     logger.info("[Pipeline] Starting PLP pipeline")
 
-    # 1) LLM for seed extraction, page type inference, selection
     generic_llm = VertexLLM(project_id=project_id)
 
     # Stage 1: seeds
@@ -874,46 +847,38 @@ def run_plp_pipeline(
         logger.warning("[Pipeline] No candidates discovered from keyword discovery phase")
         logger.warning("[Pipeline] This may be due to API errors or no matching keywords found")
         logger.warning("[Pipeline] Attempting to continue with seed keywords only...")
-        
-        # Fallback: use seed keywords as candidates if discovery failed
+
         if seeds:
             logger.info(f"[Pipeline] Using {len(seeds)} seed keywords as fallback candidates")
-            fallback_candidates = []
+            fallback_candidates: List[KeywordCandidate] = []
             for seed in seeds:
-                # Try to get at least overview data for seeds
                 try:
                     overview_resp = mcp_call_with_logging(
                         semrush_mcp,
                         "get_keyword_overview",
                         {"keyword": seed.keyword, "database": database},
                     )
-                    logger.debug(f"[Pipeline] Fallback overview response for '{seed.keyword}': {list(overview_resp.keys())}")
                     overview_text = _extract_first_text_content(overview_resp)
-                    logger.debug(f"[Pipeline] Fallback extracted text length for '{seed.keyword}': {len(overview_text)}")
                     rows = _parse_semrush_csv_text(overview_text)
-                    logger.debug(f"[Pipeline] Fallback parsed {len(rows)} rows for '{seed.keyword}'")
                     if rows:
-                        # Convert to KeywordCandidate
                         row = rows[0]
                         try:
-                            fallback_candidates.append(KeywordCandidate(
-                                keyword=row.get("Keyword", seed.keyword),
-                                volume=int(row.get("Search Volume", 0)),
-                                cpc=float(row.get("CPC", 0.0)),
-                                competition=float(row.get("Competition", 0.0)),
-                                num_results=int(row.get("Number of Results", 0)) if row.get("Number of Results") else None,
-                            ))
+                            fallback_candidates.append(
+                                KeywordCandidate(
+                                    keyword=row.get("Keyword", seed.keyword),
+                                    volume=int(row.get("Search Volume", 0)),
+                                    cpc=float(row.get("CPC", 0.0)),
+                                    competition=float(row.get("Competition", 0.0)),
+                                    num_results=int(row.get("Number of Results", 0)) if row.get("Number of Results") else None,
+                                )
+                            )
                             logger.info(f"[Pipeline] Fallback: Successfully created candidate for '{seed.keyword}'")
                         except (ValueError, KeyError) as exc:
                             logger.warning(f"[Pipeline] Could not parse overview data for seed '{seed.keyword}': {exc}")
-                            logger.debug(f"[Pipeline] Row data: {row}")
                     else:
                         logger.warning(f"[Pipeline] No rows parsed from overview for seed '{seed.keyword}'. Text was: {overview_text[:200]}")
                 except Exception as exc:
                     logger.warning(f"[Pipeline] Could not get overview for seed '{seed.keyword}': {exc}")
-                    import traceback
-                    logger.debug(f"[Pipeline] Exception traceback: {traceback.format_exc()}")
-            
             if fallback_candidates:
                 logger.info(f"[Pipeline] Fallback successful: {len(fallback_candidates)} candidates from seed keywords")
                 candidates = fallback_candidates
@@ -921,7 +886,7 @@ def run_plp_pipeline(
                 logger.error("[Pipeline] Fallback failed: could not get overview data for any seed keywords")
         else:
             logger.error("[Pipeline] No seed keywords available for fallback")
-        
+
         if not candidates:
             logger.error("[Pipeline] No candidates available even after fallback, aborting")
             return
