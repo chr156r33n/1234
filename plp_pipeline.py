@@ -939,7 +939,7 @@ def run_plp_pipeline(
                                     volume=int(row.get("Search Volume", 0)),
                                     cpc=float(row.get("CPC", 0.0)),
                                     competition=float(row.get("Competition", 0.0)),
-                                    num_results=int(row.get("Number of Results", 0)) if row.get("Number of Results") else None,
+                                   # num_results=int(row.get("Number of Results", 0)) if row.get("Number of Results") else None,
                                 )
                             )
                             logger.info(f"[Pipeline] Fallback: Successfully created candidate for '{seed.keyword}'")
