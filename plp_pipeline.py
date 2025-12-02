@@ -753,6 +753,72 @@ def select_plp_keywords(
 
 
 # -------------------------------------------------------------------
+# Title & Description Recommendations
+# -------------------------------------------------------------------
+
+def suggest_page_title_and_h1(
+    llm: VertexLLM,
+    selected_keywords: List[KeywordCandidate],
+    current_title: str,
+    current_h1: str,
+    max_options: int = 3,
+) -> List[Dict[str, str]]:
+    from json import dumps, loads
+
+    core = [c.keyword for c in selected_keywords if c.selection_role == "core"]
+    support = [c.keyword for c in selected_keywords if c.selection_role == "support"]
+
+    payload = {
+        "current_title": current_title,
+        "current_h1": current_h1,
+        "core_keywords": core[:3],
+        "support_keywords": support[:7],
+    }
+
+    prompt = TITLE_H1_PROMPT.format(data=dumps(payload, indent=2), max_options=max_options)
+    raw = llm.generate(prompt)
+    raw = _strip_markdown_code_blocks(raw)
+    data = loads(raw)
+
+    return data.get("options", [])
+
+TITLE_H1_PROMPT = """You are an SEO specialist for ecommerce PLPs.
+
+You are given:
+- The current HTML <title> and <h1> of a product listing page.
+- A set of "core" and "support" keywords selected as the best PLP targets.
+
+Your tasks:
+1. Propose up to {max_options} alternative combinations of <title> and <h1>.
+2. Each option should:
+   - Strongly feature at least one core keyword.
+   - Naturally incorporate 1–3 support keywords where appropriate.
+   - Be readable and on-brand, not keyword spam.
+3. Respect these constraints:
+   - <title>: ideally 45–60 characters, never more than ~65.
+   - <h1>: concise, human-readable, can be slightly longer than the title.
+
+Return STRICTLY JSON in this format, with no extra text:
+
+{{
+  "options": [
+    {{
+      "title": "New HTML title here",
+      "h1": "New H1 here",
+      "primary_keywords": ["..."],
+      "secondary_keywords": ["..."],
+      "rationale": "Short explanation of why this is a good PLP fit."
+    }}
+  ]
+}}
+
+Here is the input data:
+
+{data}
+"""
+
+
+# -------------------------------------------------------------------
 # CSV output
 # -------------------------------------------------------------------
 
@@ -922,8 +988,17 @@ def run_plp_pipeline(
         candidates=candidates,
         max_candidates=60,
     )
-
-    # Stage 6: CSV output
+   
+    # Stage 6: title/H1 suggestions
+    suggestions = suggest_page_title_and_h1(
+        llm=generic_llm,
+        selected_keywords=selected,
+        current_title=page_title,
+        current_h1=page_h1,
+        max_options=3,
+    )
+    
+    # Stage 7: CSV output
     write_plp_csv(selected, output_csv_path)
 
     logger.info(
