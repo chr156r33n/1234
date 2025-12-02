@@ -765,7 +765,7 @@ def write_plp_csv(
     fieldnames = [
         "keyword",
         "cluster_id",
-        "clustered_term",  # cluster_label
+        "clustered_term",  # cluster_label mapped here
         "volume",
         "cpc",
         "competition",
@@ -784,16 +784,22 @@ def write_plp_csv(
         for c in candidates:
             serp_domains = ",".join([s["domain"] for s in (c.serp_top3 or [])])
             serp_urls = ",".join([s["url"] for s in (c.serp_top3 or [])])
+
             row = asdict(c)
+
+            # Remove fields that are not in fieldnames
             row.pop("serp_top3", None)
+            row.pop("cluster_label", None)
+
             # Map cluster_label into clustered_term
             row["clustered_term"] = c.cluster_label or ""
+
             row["serp_top3_domains"] = serp_domains
             row["serp_top3_urls"] = serp_urls
+
             writer.writerow(row)
 
     logger.info(f"[CSV] Wrote {len(candidates)} rows to {file_path}")
-
 
 # -------------------------------------------------------------------
 # High-level orchestration
