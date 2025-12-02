@@ -1071,7 +1071,7 @@ def run_plp_pipeline(
     )
    
     # Stage 6: title/H1 suggestions
-suggestions = suggest_page_title_and_h1(
+    suggestions = suggest_page_title_and_h1(
         llm=generic_llm,
         selected_keywords=selected,
         current_title=page_title,
@@ -1080,7 +1080,7 @@ suggestions = suggest_page_title_and_h1(
     )
     
     # Stage 7: CSV output
-write_plp_csv(selected, output_csv_path, suggestions)
+    write_plp_csv(selected, output_csv_path, suggestions)
 
     logger.info(
         f"[Pipeline] Done. MCP calls: {MCP_CALL_COUNT}, LLM calls: {LLM_CALL_COUNT}, "
