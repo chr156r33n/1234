@@ -96,7 +96,13 @@ class KeywordCandidate:
     page_type_status: Optional[str] = None  
     page_type_explanation: Optional[str] = None 
 
-
+@dataclass
+class TitleH1Option:
+    title: str
+    h1: str
+    primary_keywords: List[str]
+    secondary_keywords: List[str]
+    rationale: str
 # -------------------------------------------------------------------
 # LLM wrapper (no tools, just text)
 # -------------------------------------------------------------------
@@ -752,37 +758,12 @@ def select_plp_keywords(
 # Title & Description Recommendations
 # -------------------------------------------------------------------
 
-def suggest_page_title_and_h1(
-    llm: VertexLLM,
-    selected_keywords: List[KeywordCandidate],
-    current_title: str,
-    current_h1: str,
-    max_options: int = 3,
-) -> List[Dict[str, str]]:
-    from json import dumps, loads
 
-    core = [c.keyword for c in selected_keywords if c.selection_role == "core"]
-    support = [c.keyword for c in selected_keywords if c.selection_role == "support"]
-
-    payload = {
-        "current_title": current_title,
-        "current_h1": current_h1,
-        "core_keywords": core[:3],
-        "support_keywords": support[:7],
-    }
-
-    prompt = TITLE_H1_PROMPT.format(data=dumps(payload, indent=2), max_options=max_options)
-    raw = llm.generate(prompt)
-    raw = _strip_markdown_code_blocks(raw)
-    data = loads(raw)
-
-    return data.get("options", [])
-
-TITLE_H1_PROMPT = """You are an SEO specialist for ecommerce PLPs.
+TITLE_H1_PROMPT = """You are an SEO specialist for ecommerce product listing pages (PLPs).
 
 You are given:
-- The current HTML <title> and <h1> of a product listing page.
-- A set of "core" and "support" keywords selected as the best PLP targets.
+- The current HTML <title> and <h1> of a PLP.
+- A set of "core" and "support" keywords that have been selected as the best PLP targets.
 
 Your tasks:
 1. Propose up to {max_options} alternative combinations of <title> and <h1>.
@@ -801,8 +782,8 @@ Return STRICTLY JSON in this format, with no extra text:
     {{
       "title": "New HTML title here",
       "h1": "New H1 here",
-      "primary_keywords": ["..."],
-      "secondary_keywords": ["..."],
+      "primary_keywords": ["core keyword 1"],
+      "secondary_keywords": ["support keyword 1", "support keyword 2"],
       "rationale": "Short explanation of why this is a good PLP fit."
     }}
   ]
@@ -821,19 +802,28 @@ Here is the input data:
 def write_plp_csv(
     candidates: List[KeywordCandidate],
     file_path: str,
+    title_suggestions: Optional[List[TitleH1Option]] = None,
 ) -> None:
+    """
+    Write selected candidates to CSV.
+    If title_suggestions are provided, the first option is repeated on each row
+    so the file contains the recommended page-level title/H1.
+    """
     if not candidates:
         logger.warning(f"[CSV] No candidates to write for {file_path}")
         return
 
+    # Use the first suggestion (if any) as the "final" recommended option
+    first_suggestion: Optional[TitleH1Option] = title_suggestions[0] if title_suggestions else None
+
     fieldnames = [
         "keyword",
-        #"cluster_id",
+        "cluster_id",
         "clustered_term",  # from cluster_label
         "volume",
         "cpc",
         "competition",
-       # "num_results",
+        "num_results",
         "current_rank",
         "best_page_type",
         "page_type_confidence",
@@ -843,6 +833,12 @@ def write_plp_csv(
         "selection_reason",
         "serp_top3_domains",
         "serp_top3_urls",
+        # Page-level suggestion fields (repeated per row)
+        "suggested_title",
+        "suggested_h1",
+        "suggested_title_rationale",
+        "suggested_primary_keywords",
+        "suggested_secondary_keywords",
     ]
     with open(file_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -862,6 +858,20 @@ def write_plp_csv(
             # normalise Nones just for CSV
             row["page_type_status"] = c.page_type_status or ""
             row["page_type_explanation"] = c.page_type_explanation or ""
+
+            # Page-level suggestion fields – same for every row
+            if first_suggestion:
+                row["suggested_title"] = first_suggestion.title
+                row["suggested_h1"] = first_suggestion.h1
+                row["suggested_title_rationale"] = first_suggestion.rationale
+                row["suggested_primary_keywords"] = ",".join(first_suggestion.primary_keywords)
+                row["suggested_secondary_keywords"] = ",".join(first_suggestion.secondary_keywords)
+            else:
+                row["suggested_title"] = ""
+                row["suggested_h1"] = ""
+                row["suggested_title_rationale"] = ""
+                row["suggested_primary_keywords"] = ""
+                row["suggested_secondary_keywords"] = ""
 
             writer.writerow(row)
 
