@@ -87,7 +87,7 @@ class KeywordCandidate:
     cpc: float
     competition: float
     num_results: Optional[int] = None
-    target_rank: Optional[int] = None
+    current_rank: Optional[int] = None
     serp_top3: Optional[List[Dict[str, str]]] = None
     best_page_type: Optional[str] = None
     page_type_confidence: Optional[float] = None
