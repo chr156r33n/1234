@@ -794,6 +794,81 @@ Here is the input data:
 {data}
 """
 
+def suggest_page_title_and_h1(
+    llm: VertexLLM,
+    selected_keywords: List[KeywordCandidate],
+    current_title: str,
+    current_h1: str,
+    max_options: int = 3,
+) -> List[TitleH1Option]:
+    """
+    Use the selected PLP keywords to propose new <title> and <h1> options.
+    Returns a small list (up to max_options) of TitleH1Option.
+    """
+    from json import dumps, loads
+
+    if not selected_keywords:
+        logger.warning("[TitleH1] No selected keywords, skipping title/H1 suggestions")
+        return []
+
+    # Collect core and support keywords
+    core = [c.keyword for c in selected_keywords if c.selection_role == "core"]
+    support = [c.keyword for c in selected_keywords if c.selection_role == "support"]
+
+    # Deduplicate while preserving order
+    def dedupe(seq: List[str]) -> List[str]:
+        seen = set()
+        out: List[str] = []
+        for x in seq:
+            if x not in seen:
+                seen.add(x)
+                out.append(x)
+        return out
+
+    core = dedupe(core)[:3]
+    support = dedupe(support)[:7]
+
+    payload = {
+        "current_title": current_title,
+        "current_h1": current_h1,
+        "core_keywords": core,
+        "support_keywords": support,
+    }
+
+    prompt = TITLE_H1_PROMPT.format(
+        data=dumps(payload, indent=2),
+        max_options=max_options,
+    )
+    raw = llm.generate(prompt)
+    raw = _strip_markdown_code_blocks(raw)
+
+    try:
+        data = loads(raw)
+    except Exception as exc:
+        logger.error(f"[TitleH1] Failed to parse JSON from LLM: {exc}")
+        logger.error(f"[TitleH1] Raw response (first 400 chars): {raw[:400]}...")
+        return []
+
+    options_raw = data.get("options", []) or []
+    options: List[TitleH1Option] = []
+
+    for item in options_raw[:max_options]:
+        try:
+            options.append(
+                TitleH1Option(
+                    title=(item.get("title") or "").strip(),
+                    h1=(item.get("h1") or "").strip(),
+                    primary_keywords=[k.strip() for k in (item.get("primary_keywords") or []) if k.strip()],
+                    secondary_keywords=[k.strip() for k in (item.get("secondary_keywords") or []) if k.strip()],
+                    rationale=(item.get("rationale") or "").strip(),
+                )
+            )
+        except Exception as exc:
+            logger.warning(f"[TitleH1] Skipping malformed option {item}: {exc}")
+
+    logger.info(f"[TitleH1] Generated {len(options)} title/H1 options")
+    return options
+
 
 # -------------------------------------------------------------------
 # CSV output
@@ -996,7 +1071,7 @@ def run_plp_pipeline(
     )
    
     # Stage 6: title/H1 suggestions
-    suggestions = suggest_page_title_and_h1(
+suggestions = suggest_page_title_and_h1(
         llm=generic_llm,
         selected_keywords=selected,
         current_title=page_title,
@@ -1005,7 +1080,7 @@ def run_plp_pipeline(
     )
     
     # Stage 7: CSV output
-    write_plp_csv(selected, output_csv_path)
+    write_plp_csv(selected, output_csv_path, suggestions)
 
     logger.info(
         f"[Pipeline] Done. MCP calls: {MCP_CALL_COUNT}, LLM calls: {LLM_CALL_COUNT}, "
