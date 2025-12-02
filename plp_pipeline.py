@@ -683,11 +683,12 @@ You are given a list of candidate keywords with metrics:
 
 Your task:
 1. Select 10–20 keywords that are the best targets for a PLP.
-2. Prefer:
+2. Cluster keywords into close-related groups
+3. Prefer:
    - keywords where best_page_type is "PLP" with high confidence
    - good search volume without impossible competition
    - existing rankings where target_rank is between 2 and 20 (good uplift opportunity)
-3. Allow a mix of:
+4. Allow a mix of:
    - 1–3 primary core terms
    - several mid-tail support terms
    - a few long-tail terms if they clearly fit the PLP
@@ -784,11 +785,12 @@ def write_plp_csv(
 
     fieldnames = [
         "keyword",
+        "clustered_term",
         "volume",
         "cpc",
         "competition",
         "num_results",
-        "target_rank",
+        "current_rank",
         "best_page_type",
         "page_type_confidence",
         "selection_role",
