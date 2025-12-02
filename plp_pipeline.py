@@ -766,12 +766,12 @@ def write_plp_csv(
 
     fieldnames = [
         "keyword",
-        "cluster_id",
+        #"cluster_id",
         "clustered_term",  # from cluster_label
         "volume",
         "cpc",
         "competition",
-        "num_results",
+       # "num_results",
         "current_rank",
         "best_page_type",
         "page_type_confidence",
