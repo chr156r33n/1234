@@ -84,19 +84,17 @@ class KeywordCandidate:
     volume: int
     cpc: float
     competition: float
-    num_results: Optional[int] = None
+    # num_results: Optional[int] = None
     current_rank: Optional[int] = None
     serp_top3: Optional[List[Dict[str, str]]] = None
     best_page_type: Optional[str] = None
     page_type_confidence: Optional[float] = None
     selection_role: Optional[str] = None
     selection_reason: Optional[str] = None
-    cluster_id: Optional[int] = None
+    # cluster_id: Optional[int] = None
     cluster_label: Optional[str] = None
-
-    # page-type diagnostics
-    page_type_status: Optional[str] = None          # e.g. inferred, no_serp, llm_missing, llm_error
-    page_type_explanation: Optional[str] = None     # human-readable explanation
+    page_type_status: Optional[str] = None  
+    page_type_explanation: Optional[str] = None 
 
 
 # -------------------------------------------------------------------
@@ -390,11 +388,11 @@ def discover_keywords_with_semrush(
                 comp = float(row.get("Competition") or row.get("competition") or 0.0)
             except ValueError:
                 comp = 0.0
-            try:
-                nres = row.get("Number of Results") or row.get("results") or None
-                num_results = int(nres) if nres is not None else None
-            except ValueError:
-                num_results = None
+           # try:
+             #   nres = row.get("Number of Results") or row.get("results") or None
+             #   num_results = int(nres) if nres is not None else None
+            #except ValueError:
+               # num_results = None
 
             if kw in candidates:
                 continue
@@ -404,7 +402,7 @@ def discover_keywords_with_semrush(
                 volume=vol,
                 cpc=cpc,
                 competition=comp,
-                num_results=num_results,
+               # num_results=num_results,
             )
 
     for seed in seeds:
@@ -666,7 +664,6 @@ Return strictly JSON in this format (no extra text):
       "keyword": "example keyword",
       "keep": true,
       "role": "core",
-      "cluster_id": 1,
       "cluster_label": "short human-readable label for this cluster",
       "reason": "Short rationale referencing volume, competition, rankings and cluster fit."
     }}
@@ -675,9 +672,8 @@ Return strictly JSON in this format (no extra text):
 
 Rules:
 - role must be one of "core", "support", "long_tail".
-- All selected keywords MUST have a cluster_id (integer, e.g. 1, 2, 3…).
 - cluster_label should describe the shared theme (e.g. "anti aging moisturiser", "oil-free face cream").
-- Keywords in the same semantic group share the same cluster_id and cluster_label.
+- Keywords in the same semantic group share the same cluster_label.
 
 Here is the candidate data:
 
@@ -738,11 +734,11 @@ def select_plp_keywords(
 
         c.selection_reason = (info.get("reason") or "").strip()
 
-        cluster_id = info.get("cluster_id")
-        try:
-            c.cluster_id = int(cluster_id) if cluster_id is not None else None
-        except (TypeError, ValueError):
-            c.cluster_id = None
+        #cluster_id = info.get("cluster_id")
+      #  try:
+        #    c.cluster_id = int(cluster_id) if cluster_id is not None else None
+       # except (TypeError, ValueError):
+         #   c.cluster_id = None
 
         c.cluster_label = (info.get("cluster_label") or "").strip() or None
 
