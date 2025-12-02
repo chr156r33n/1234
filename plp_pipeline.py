@@ -683,7 +683,7 @@ You are given a list of candidate keywords with metrics:
 
 Your task:
 1. Select 10–20 keywords that are the best targets for a PLP.
-2. Cluster keywords into close-related groups
+2. Cluster these selected keywords into closely-related groups.
 3. Prefer:
    - keywords where best_page_type is "PLP" with high confidence
    - good search volume without impossible competition
@@ -693,22 +693,27 @@ Your task:
    - several mid-tail support terms
    - a few long-tail terms if they clearly fit the PLP
 
-Return strictly JSON in this format:
+Return strictly JSON in this format (no extra text):
 
-{{
+{
   "selection": [
-    {{
+    {
       "keyword": "...",
       "keep": true,
       "role": "core" | "support" | "long_tail",
-      "reason": "Short rationale referencing volume, competition, and rankings."
-    }}
+      "cluster_id": 1,
+      "cluster_label": "short human-readable label for this cluster",
+      "reason": "Short rationale referencing volume, competition, rankings and cluster fit."
+    }
   ]
-}}
+}
+
+Clustering rules:
+- All selected keywords MUST have a cluster_id (integer, e.g. 1, 2, 3…).
+- cluster_label should describe the shared theme (e.g. "anti aging moisturiser", "oil-free face cream").
+- Keywords in the same semantic group share the same cluster_id and cluster_label.
 
 Here is the candidate data:
-
-{data}
 """
 
 
