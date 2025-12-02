@@ -508,7 +508,7 @@ def discover_keywords_with_semrush(
 # Stage 3: Target domain rankings
 # -------------------------------------------------------------------
 
-def enrich_with_target_rank(
+def enrich_with_current_rank(
     mcp: SemrushMCPClient,
     candidates: List[KeywordCandidate],
     target_domain: str,
@@ -518,7 +518,7 @@ def enrich_with_target_rank(
 ) -> None:
     """
     For each candidate, call a Semrush SERP tool and set:
-      - target_rank
+      - current_rank
       - serp_top3 (domain/url)
     Mutates the candidates in place.
     """
@@ -548,7 +548,7 @@ def enrich_with_target_rank(
         serp_text = _extract_first_text_content(serp_resp)
         rows = _parse_semrush_csv_text(serp_text)
         serp_top3 = []
-        cand.target_rank = None
+        cand.current_rank = None
 
         for j, row in enumerate(rows):
             dom = (row.get("Domain") or row.get("domain") or "").strip()
@@ -560,11 +560,11 @@ def enrich_with_target_rank(
                 pos_str = row.get("Position") or row.get("position")
                 if pos_str:
                     try:
-                        cand.target_rank = int(pos_str)
+                        cand.current_rank = int(pos_str)
                     except ValueError:
-                        cand.target_rank = None
+                        cand.current_rank = None
                 else:
-                    cand.target_rank = j + 1
+                    cand.current_rank = j + 1
         cand.serp_top3 = serp_top3
 
     logger.info("[Rank] Ranking enrichment completed")
@@ -677,7 +677,7 @@ You are given a list of candidate keywords with metrics:
 - search volume
 - CPC
 - competition
-- target_rank (existing ranking position, or null)
+- current_rank (existing ranking position, or null)
 - best_page_type (PLP, PDP, Blog, Guide, Brand, Other)
 - page_type_confidence
 
@@ -687,7 +687,7 @@ Your task:
 3. Prefer:
    - keywords where best_page_type is "PLP" with high confidence
    - good search volume without impossible competition
-   - existing rankings where target_rank is between 2 and 20 (good uplift opportunity)
+   - existing rankings where current_rank is between 2 and 20 (good uplift opportunity)
 4. Allow a mix of:
    - 1–3 primary core terms
    - several mid-tail support terms
@@ -736,7 +736,7 @@ def select_plp_keywords(
                 "volume": c.volume,
                 "cpc": c.cpc,
                 "competition": c.competition,
-                "target_rank": c.target_rank,
+                "current_rank": c.current_rank,
                 "best_page_type": c.best_page_type,
                 "page_type_confidence": c.page_type_confidence,
             }
@@ -922,7 +922,7 @@ def run_plp_pipeline(
             return
 
     # Stage 3: rankings
-    enrich_with_target_rank(
+    enrich_with_current_rank(
         mcp=semrush_mcp,
         candidates=candidates,
         target_domain=target_domain,
