@@ -62,10 +62,8 @@ def with_retries(
                     current_delay *= backoff
         return wrapper
 
-    # If called as @with_retries (no parentheses) or @with_retries() or @with_retries(label="...")
     if func is None:
         return decorator
-    # If called directly as with_retries(func, label="...")
     return decorator(func)
 
 
@@ -96,6 +94,10 @@ class KeywordCandidate:
     cluster_id: Optional[int] = None
     cluster_label: Optional[str] = None
 
+    # page-type diagnostics
+    page_type_status: Optional[str] = None          # e.g. inferred, no_serp, llm_missing, llm_error
+    page_type_explanation: Optional[str] = None     # human-readable explanation
+
 
 # -------------------------------------------------------------------
 # LLM wrapper (no tools, just text)
@@ -118,14 +120,13 @@ class VertexLLM:
         )
         self.generation_config = {
             "temperature": temperature,
-            "max_output_tokens": 30096,  # Increased for longer JSON responses
+            "max_output_tokens": 30096,
             "top_p": 0.95,
             "top_k": 32,
         }
 
     @with_retries(label="LLM.generate")
     def generate(self, prompt: str) -> str:
-        """Simple wrapper, returns raw text. Retries on transient errors."""
         global LLM_CALL_COUNT
         LLM_CALL_COUNT += 1
         logger.debug(f"[LLM] Prompt length: {len(prompt)} chars")
@@ -139,14 +140,13 @@ class VertexLLM:
 
         cand = resp.candidates[0]
 
-        # Check if response was truncated
         finish_reason = getattr(cand, "finish_reason", None)
         if finish_reason:
             finish_reason_str = str(finish_reason)
             if hasattr(finish_reason, "name"):
                 finish_reason_str = finish_reason.name
             if "MAX_TOKENS" in finish_reason_str or "max_tokens" in finish_reason_str.lower():
-                logger.warning("[LLM] Response was truncated due to MAX_TOKENS limit. Consider increasing max_output_tokens.")
+                logger.warning("[LLM] Response was truncated due to MAX_TOKENS limit.")
 
         try:
             text = cand.text
@@ -181,7 +181,7 @@ def mcp_call_with_logging(
     args: Dict[str, Any],
 ) -> Dict[str, Any]:
     global MCP_CALL_COUNT
-    MCP_CALL_COUNT += 1
+    MCP_CALL_COUNT += 1    # noqa: PLW0603
     logger.debug(f"[MCP] Calling {tool_name} with args={args}")
     resp = mcp.call(tool_name, args)
     logger.debug(f"[MCP] {tool_name} raw response keys: {list(resp.keys())}")
@@ -192,7 +192,6 @@ def _extract_first_text_content(mcp_response: Dict[str, Any]) -> str:
     """
     Extract the first text content from an MCP tool response.
     """
-    # Check for errors first
     if not mcp_response.get("success", False):
         error_msg = mcp_response.get("error") or mcp_response.get("message", "Unknown error")
         logger.warning(f"[MCP] Response indicates failure: {error_msg}")
@@ -361,9 +360,6 @@ def discover_keywords_with_semrush(
     max_per_seed: int = 20,
     max_seeds: int = 5,
 ) -> List[KeywordCandidate]:
-    """
-    For each seed keyword, call Semrush tools and build KeywordCandidate list.
-    """
     if not seeds:
         logger.warning("[Discover] No seeds provided, skipping Semrush discovery")
         return []
@@ -415,7 +411,6 @@ def discover_keywords_with_semrush(
         seed_kw = seed.keyword
         logger.info(f"[Discover] Processing seed '{seed_kw}'")
 
-        # Overview
         try:
             overview_resp = mcp_call_with_logging(
                 mcp,
@@ -427,7 +422,6 @@ def discover_keywords_with_semrush(
         except Exception as exc:
             logger.warning(f"[Discover] overview failed for '{seed_kw}': {exc}")
 
-        # Fullsearch
         try:
             fullsearch_resp = mcp_call_with_logging(
                 mcp,
@@ -439,7 +433,6 @@ def discover_keywords_with_semrush(
         except Exception as exc:
             logger.warning(f"[Discover] fullsearch failed for '{seed_kw}': {exc}")
 
-        # Related
         try:
             related_resp = mcp_call_with_logging(
                 mcp,
@@ -451,7 +444,6 @@ def discover_keywords_with_semrush(
         except Exception as exc:
             logger.warning(f"[Discover] related failed for '{seed_kw}': {exc}")
 
-        # Questions
         try:
             questions_resp = mcp_call_with_logging(
                 mcp,
@@ -479,11 +471,6 @@ def enrich_with_current_rank(
     serp_limit: int = 20,
     max_keywords: int = 50,
 ) -> None:
-    """
-    For each candidate, call SERP tool and set:
-      - current_rank
-      - serp_top3
-    """
     if not candidates:
         logger.warning("[Rank] No candidates to enrich with rankings")
         return
@@ -505,12 +492,20 @@ def enrich_with_current_rank(
             )
         except Exception as exc:
             logger.warning(f"[Rank] SERP fetch failed for '{kw}': {exc}")
+            cand.page_type_status = cand.page_type_status or "no_serp"
+            cand.page_type_explanation = cand.page_type_explanation or "SERP fetch failed."
             continue
 
         serp_text = _extract_first_text_content(serp_resp)
         rows = _parse_semrush_csv_text(serp_text)
-        serp_top3 = []
+        serp_top3: List[Dict[str, str]] = []
         cand.current_rank = None
+
+        if not rows:
+            cand.page_type_status = cand.page_type_status or "no_serp"
+            cand.page_type_explanation = cand.page_type_explanation or "No SERP data available for this keyword."
+            cand.serp_top3 = []
+            continue
 
         for j, row in enumerate(rows):
             dom = (row.get("Domain") or row.get("domain") or "").strip()
@@ -527,7 +522,11 @@ def enrich_with_current_rank(
                         cand.current_rank = None
                 else:
                     cand.current_rank = j + 1
+
         cand.serp_top3 = serp_top3
+        if serp_top3 and not cand.page_type_status:
+            cand.page_type_status = "pending"
+            cand.page_type_explanation = None
 
     logger.info("[Rank] Ranking enrichment completed")
 
@@ -573,9 +572,6 @@ def infer_page_types(
     candidates: List[KeywordCandidate],
     max_keywords: int = 30,
 ) -> None:
-    """
-    Batch a subset of candidates into one LLM call to infer best_page_type & confidence.
-    """
     from json import dumps, loads
 
     subset = [c for c in candidates if c.serp_top3]
@@ -606,7 +602,10 @@ def infer_page_types(
         logger.error(f"[PageType] Response (first 800 chars): {raw[:800]}")
         if len(raw) > 800:
             logger.error(f"[PageType] Response (last 200 chars): ...{raw[-200:]}")
-        logger.warning("[PageType] Continuing without page type inference - candidates will have None for page_type fields")
+        logger.warning("[PageType] Marking candidates with SERP as llm_error")
+        for cand in subset:
+            cand.page_type_status = "llm_error"
+            cand.page_type_explanation = "Page type inference failed: could not parse LLM JSON response."
         return
 
     mapping = {item["keyword"]: item for item in data.get("results", [])}
@@ -614,12 +613,19 @@ def infer_page_types(
     for cand in subset:
         info = mapping.get(cand.keyword)
         if not info:
+            if cand.page_type_status in (None, "pending"):
+                cand.page_type_status = "llm_missing"
+                cand.page_type_explanation = "LLM did not return a page type for this keyword."
             continue
-        cand.best_page_type = info.get("best_page_type")
+
+        cand.best_page_type = info.get("best_page_type") or "Unknown"
         try:
             cand.page_type_confidence = float(info.get("confidence", 0.5))
         except (TypeError, ValueError):
             cand.page_type_confidence = 0.5
+
+        cand.page_type_status = "inferred"
+        cand.page_type_explanation = (info.get("reason") or "").strip() or None
 
     logger.info(f"[PageType] Inferred page type for {len(mapping)} keywords")
 
@@ -684,10 +690,6 @@ def select_plp_keywords(
     candidates: List[KeywordCandidate],
     max_candidates: int = 60,
 ) -> List[KeywordCandidate]:
-    """
-    Uses LLM to label which keywords to keep, role, cluster and reason.
-    Returns new list of selected candidates (mutated with selection_* and cluster_* fields).
-    """
     from json import dumps, loads
 
     if not candidates:
@@ -765,14 +767,16 @@ def write_plp_csv(
     fieldnames = [
         "keyword",
         "cluster_id",
-        "clustered_term",  
+        "clustered_term",  # from cluster_label
         "volume",
         "cpc",
         "competition",
-      #  "num_results",
+        "num_results",
         "current_rank",
         "best_page_type",
         "page_type_confidence",
+        "page_type_status",
+        "page_type_explanation",
         "selection_role",
         "selection_reason",
         "serp_top3_domains",
@@ -786,20 +790,21 @@ def write_plp_csv(
             serp_urls = ",".join([s["url"] for s in (c.serp_top3 or [])])
 
             row = asdict(c)
-
-            # Remove fields that are not in fieldnames
             row.pop("serp_top3", None)
             row.pop("cluster_label", None)
 
-            # Map cluster_label into clustered_term
             row["clustered_term"] = c.cluster_label or ""
-
             row["serp_top3_domains"] = serp_domains
             row["serp_top3_urls"] = serp_urls
+
+            # normalise Nones just for CSV
+            row["page_type_status"] = c.page_type_status or ""
+            row["page_type_explanation"] = c.page_type_explanation or ""
 
             writer.writerow(row)
 
     logger.info(f"[CSV] Wrote {len(candidates)} rows to {file_path}")
+
 
 # -------------------------------------------------------------------
 # High-level orchestration
@@ -816,9 +821,6 @@ def run_plp_pipeline(
     output_csv_path: str,
     debug: bool = False,
 ) -> None:
-    """
-    Glue it all together.
-    """
     global MCP_CALL_COUNT, LLM_CALL_COUNT
     MCP_CALL_COUNT = 0
     LLM_CALL_COUNT = 0
