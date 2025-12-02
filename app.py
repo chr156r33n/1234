@@ -27,7 +27,7 @@ class StreamlitHandler(logging.Handler):
 
     def emit(self, record):
         msg = self.format(record)
-        # Only touch session_state; UI is updated in main thread
+        # Only mutate session_state; UI is updated in main thread after run
         logs = st.session_state.get(self.state_key, [])
         logs.append(msg)
         st.session_state[self.state_key] = logs
@@ -53,7 +53,7 @@ def init_vertex_from_uploaded_credentials(project_id: str, location: str = "us-c
 def main():
     st.set_page_config(page_title="PLP Pipeline UI", layout="wide")
 
-    # Ensure log storage exists
+    # Ensure storage exists
     st.session_state.setdefault("log_messages", [])
     st.session_state.setdefault("gcp_credentials_info", None)
 
@@ -124,6 +124,7 @@ def main():
     st.subheader("Logs")
     log_box = st.empty()
 
+    status_placeholder = st.empty()
     result_placeholder = st.empty()
     download_placeholder = st.empty()
 
@@ -152,7 +153,7 @@ def main():
 
         st.session_state["gcp_project_id"] = gcp_project_id
 
-        # ------------- Logging into UI (via session_state) -------------
+        # ------------- Logging into memory -------------
         handler = StreamlitHandler(state_key="log_messages")
         handler.setLevel(logging.DEBUG if debug else logging.INFO)
         handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
@@ -195,35 +196,38 @@ def main():
 
             frames: List[pd.DataFrame] = []
 
-            for url in urls:
-                logging.info(f"[UI] Processing URL: {url}")
+            # Single, simple process indicator – no per-URL UI updates
+            with st.spinner(f"Running pipeline for {len(urls)} URL(s)…"):
+                logging.info(f"[UI] Starting pipeline for {len(urls)} URL(s)")
 
-                target_domain = extract_domain(url)
-                title, h1, body = fetch_page_content(url)
+                for url in urls:
+                    logging.info(f"[UI] Processing URL: {url}")
 
-                with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
-                    output_path = tmp.name
+                    target_domain = extract_domain(url)
+                    title, h1, body = fetch_page_content(url)
 
-                logging.info(f"[UI] Running PLP pipeline for {url}")
-                run_plp_pipeline(
-                    project_id=gcp_project_id,
-                    semrush_mcp=semrush_client,
-                    database=database,
-                    target_domain=target_domain,
-                    page_title=title or "",
-                    page_h1=h1 or "",
-                    page_body=body or "",
-                    output_csv_path=output_path,
-                    debug=debug,
-                )
+                    with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp:
+                        output_path = tmp.name
 
-                # Update logs in UI after each URL
-                logs = st.session_state.get("log_messages", [])
-                log_box.text("\n".join(logs))
+                    logging.info(f"[UI] Running PLP pipeline for {url}")
+                    run_plp_pipeline(
+                        project_id=gcp_project_id,
+                        semrush_mcp=semrush_client,
+                        database=database,
+                        target_domain=target_domain,
+                        page_title=title or "",
+                        page_h1=h1 or "",
+                        page_body=body or "",
+                        output_csv_path=output_path,
+                        debug=debug,
+                    )
 
-                df = pd.read_csv(output_path)
-                df.insert(0, "source_url", url)
-                frames.append(df)
+                    df = pd.read_csv(output_path)
+                    df.insert(0, "source_url", url)
+                    frames.append(df)
+
+            # Spinner exits here: show status
+            status_placeholder.success("Processing complete.")
 
             if frames:
                 combined = pd.concat(frames, ignore_index=True)
@@ -240,16 +244,19 @@ def main():
             else:
                 result_placeholder.info("No results produced by the pipeline.")
 
-            # Final log refresh
+            # Final log dump
             logs = st.session_state.get("log_messages", [])
-            log_box.text("\n".join(logs))
+            if logs:
+                log_box.text("\n".join(logs))
+            else:
+                log_box.text("[INFO] No logs captured.")
 
         except Exception as e:
-            # Throw error into UI, keep logs visible
             logging.exception("Pipeline run failed")
+            status_placeholder.error("Pipeline failed.")
             st.error(f"Pipeline failed: {e}")
             logs = st.session_state.get("log_messages", [])
-            log_box.text("\n".join(logs))
+            log_box.text("\n".join(logs) if logs else "[ERROR] No additional logs available.")
 
         finally:
             # Restore original VertexLLM and remove handler
